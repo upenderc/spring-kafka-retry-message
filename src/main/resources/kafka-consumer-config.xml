@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:int="http://www.springframework.org/schema/integration"
+	xmlns:stream="http://www.springframework.org/schema/integration/stream"
+	xmlns:int-kafka="http://www.springframework.org/schema/integration/kafka"
+	xmlns:task="http://www.springframework.org/schema/task"
+	xsi:schemaLocation="http://www.springframework.org/schema/integration/stream http://www.springframework.org/schema/integration/stream/spring-integration-stream.xsd
+        http://www.springframework.org/schema/integration/kafka http://www.springframework.org/schema/integration/kafka/spring-integration-kafka.xsd
+        http://www.springframework.org/schema/integration http://www.springframework.org/schema/integration/spring-integration.xsd
+        http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd
+        http://www.springframework.org/schema/task http://www.springframework.org/schema/task/spring-task.xsd">
+
+	
+
+	<int:channel id="kafkaSRCInboundFromKafka" />
+	<int:channel id="operationChannel" />
+	<int:control-bus input-channel="operationChannel"/>
+	<int:channel id="retryInboundFromKafka" />
+    <int:gateway service-interface="com.poc.krm.KafkaAdapterStatusGateway" default-request-channel="operationChannel" />
+    
+	<int:channel id="processChannel">
+	</int:channel>
+	
+	<int-kafka:zookeeper-connect id="zookeeperConnect"
+		zk-connect="${zookeeper.server}" zk-connection-timeout="${zookeeper.connection.timeout}"
+		zk-session-timeout="${zookeeper.session.timeout}" zk-sync-time="${zookeeper.sync.time}" />
+
+	<bean id="consumerProperties"
+		class="org.springframework.beans.factory.config.PropertiesFactoryBean">
+		<property name="properties">
+			<props>
+				<prop key="auto.offset.reset">${kafka.consumer.auto.offset.reset}</prop>
+				<prop key="socket.receive.buffer.bytes">${kafka.consumer.socket.receive.buffer.byte}</prop> <!-- 10M -->
+				<prop key="fetch.message.max.bytes">${kafka.consumer.fetch.message.max.bytes}</prop>
+				<prop key="auto.commit.interval.ms">${kafka.consumer.auto.commit.interval.ms}</prop>
+			</props>
+		</property>
+	</bean>
+
+	
+	<int-kafka:inbound-channel-adapter
+		id="kafkaSRCInboundChannelAdapter" kafka-consumer-context-ref="consumerContext"
+		auto-startup="true" channel="kafkaSRCInboundFromKafka" >
+		<int:poller fixed-delay="${kafka.inbound.message.poller.time}"
+			time-unit="MILLISECONDS"  task-executor="splitterExecutor"/>
+	</int-kafka:inbound-channel-adapter>
+
+	
+	<int-kafka:consumer-context id="consumerContext"
+		consumer-timeout="${kafka.consumer.timeout}" zookeeper-connect="zookeeperConnect"
+		consumer-properties="consumerProperties">
+		<int-kafka:consumer-configurations>
+			<int-kafka:consumer-configuration
+				group-id="${kafka.consumer.group.name}" max-messages="${kafka.consumer.max.messages.size}"
+				key-decoder="keyDeccoder" value-decoder="valueDeccoder">
+				<int-kafka:topic id="${kafka.topic.name}"
+					streams="${kafka.stream.size}" />
+			</int-kafka:consumer-configuration>
+		</int-kafka:consumer-configurations>
+	</int-kafka:consumer-context>
+	<int:bridge input-channel="kafkaSRCInboundFromKafka" output-channel="processChannel" />
+	<!--  Retry Topic BEGIN-->
+	<int-kafka:inbound-channel-adapter
+		id="retryInboundChannelAdapter" kafka-consumer-context-ref="retryConsumerContext"
+		auto-startup="false" channel="retryInboundFromKafka" group-id="${retry.kafka.consumer.group.name}">
+		 <int:poller fixed-delay="${retry.kafka.inbound.message.poller.time}"
+			time-unit="MILLISECONDS"  task-executor="splitterExecutor"/>
+	</int-kafka:inbound-channel-adapter>
+	
+	<int-kafka:consumer-context id="retryConsumerContext"
+		consumer-timeout="${kafka.consumer.timeout}" zookeeper-connect="zookeeperConnect"
+		consumer-properties="consumerProperties">
+		<int-kafka:consumer-configurations>
+			<int-kafka:consumer-configuration
+				group-id="${retry.kafka.consumer.group.name}" max-messages="${retry.kafka.consumer.max.messages.size}" 
+				key-decoder="keyDeccoder" value-decoder="valueDeccoder">
+				<int-kafka:topic id="${retry.kafka.topic.name}"
+					streams="${retry.kafka.stream.size}" />
+			</int-kafka:consumer-configuration>
+		</int-kafka:consumer-configurations>
+	</int-kafka:consumer-context>
+	
+	<!--  Retry Topic END-->
+	<int:bridge input-channel="retryInboundFromKafka" output-channel="processChannel" />
+	<task:executor id="splitterExecutor" pool-size="0-10"
+		keep-alive="1" queue-capacity="100" />
+	
+	<bean id="keyDeccoder"	class="org.springframework.integration.kafka.serializer.common.StringDecoder" />
+	<bean id="valueDeccoder"	class="org.springframework.integration.kafka.serializer.common.StringDecoder" />
+	<!-- task:scheduled-tasks scheduler="kafkaInboundAdapterEnableScheduler">
+		<task:scheduled ref="retryTopicSchedulerTask" method="enableAdapter" fixed-delay="10000" />
+	  </task:scheduled-tasks>
+	 <task:scheduler id="kafkaInboundAdapterEnableScheduler" /> -->
+	 
+	 
+
+</beans>
